@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cyberpunk Audio Visualizer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', sans-serif; }
+    body { background: #050515; overflow: hidden; color: #fff; }
+    
+    /* Canvas 3D Background */
+    #bg-canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; }
+
+    /* UI Overlay */
+    .ui-container {
+      position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+      z-index: 2; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      background: radial-gradient(circle, transparent 40%, rgba(5,5,21,0.8) 100%);
+    }
+
+    /* Vinyl Record */
+    .vinyl-wrapper {
+      position: relative; width: 220px; height: 220px; margin-bottom: 25px;
+    }
+    .vinyl {
+      width: 100%; height: 100%; border-radius: 50%;
+      background: radial-gradient(circle, #333 15%, #111 16%, #222 30%, #111 31%, #222 50%, #111 51%, #000 100%);
+      border: 4px solid #333;
+      box-shadow: 0 0 30px rgba(168, 85, 247, 0.4);
+      transition: transform 0.1s linear;
+    }
+    .spinning { animation: spin 3s linear infinite; }
+    @keyframes spin { 100% { transform: rotate(360deg); } }
+
+    /* Controls & Track Info */
+    .track-info { text-align: center; margin-bottom: 15px; text-shadow: 0 0 10px #a855f7; }
+    .track-title { font-size: 1.2rem; font-weight: bold; }
+    
+    .controls { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+    .file-input { display: none; }
+    .btn {
+      background: linear-gradient(135deg, #a855f7, #2563eb);
+      border: none; color: white; padding: 10px 20px; border-radius: 20px;
+      cursor: pointer; font-weight: bold; box-shadow: 0 0 15px rgba(37, 99, 235, 0.5);
+    }
+    audio { margin-top: 10px; filter: invert(100%) hue-rotate(180deg); }
+  </style>
+  <!-- Three.js CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+  <canvas id="bg-canvas"></canvas>
+
+  <div class="ui-container">
+    <div class="vinyl-wrapper">
+      <div class="vinyl" id="vinyl"></div>
+    </div>
+
+    <div class="track-info">
+      <div class="track-title" id="track-title">PILIH ATAU DROP FILE MP3</div>
+    </div>
+
+    <div class="controls">
+      <button class="btn" onclick="document.getElementById('audio-file').click()">Buka File Musik</button>
+      <input type="file" id="audio-file" class="file-input" accept="audio/*">
+      <audio id="audio-player" controls></audio>
+    </div>
+  </div>
+
+  <script>
+    // --- 1. SETUP THREE.JS (3D TERRAIN WAVES) ---
+    const canvas = document.getElementById('bg-canvas');
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.position.set(0, 3, 8);
+    camera.lookAt(0, 0, 0);
+
+    // Plane Geometry (Grid Bukit)
+    const geometry = new THREE.PlaneGeometry(30, 20, 40, 30);
+    const material = new THREE.MeshBasicMaterial({
+      color: 0x9333ea,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.6
+    });
+    const terrain = new THREE.Mesh(geometry, material);
+    terrain.rotation.x = -Math.PI / 2.5;
+    terrain.position.y = -2;
+    scene.add(terrain);
+
+    // --- 2. AUDIO API & BASS DETECTION ---
+    const audioPlayer = document.getElementById('audio-player');
+    const audioInput = document.getElementById('audio-file');
+    const vinyl = document.getElementById('vinyl');
+    const trackTitle = document.getElementById('track-title');
+
+    let audioCtx, analyser, source, dataArray;
+    let isAudioSetup = false;
+
+    function setupAudio() {
+      if (isAudioSetup) return;
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 64;
+      source = audioCtx.createMediaElementSource(audioPlayer);
+      source.connect(analyser);
+      analyser.connect(audioCtx.destination);
+      dataArray = new Uint8Array(analyser.frequencyBinCount);
+      isAudioSetup = true;
+    }
+
+    // Input Audio Handler
+    audioInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        audioPlayer.src = URL.createObjectURL(file);
+        trackTitle.innerText = file.name.replace(/\.[^/.]+$/, "");
+        setupAudio();
+        audioPlayer.play();
+      }
+    });
+
+    audioPlayer.addEventListener('play', () => {
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+      vinyl.classList.add('spinning');
+    });
+    audioPlayer.addEventListener('pause', () => vinyl.classList.remove('spinning'));
+
+    // --- 3. ANIMATION LOOP ---
+    const posAttr = geometry.attributes.position;
+    const initialZ = [];
+    for (let i = 0; i < posAttr.count; i++) initialZ.push(posAttr.getZ(i));
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      let bassValue = 0;
+      if (isAudioSetup && !audioPlayer.paused) {
+        analyser.getByteFrequencyData(dataArray);
+        bassValue = (dataArray[1] + dataArray[2] + dataArray[3]) / 3;
+      }
+
+      for (let i = 0; i < posAttr.count; i++) {
+        const zOffset = Math.sin(i + Date.now() * 0.003) * (bassValue / 35);
+        posAttr.setZ(i, initialZ[i] + zOffset);
+      }
+      posAttr.needsUpdate = true;
+
+      if (bassValue > 150) {
+        material.color.setHex(0x3b82f6);
+      } else {
+        material.color.setHex(0x9333ea);
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    animate();
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
